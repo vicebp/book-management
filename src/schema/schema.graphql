@@ -1,0 +1,120 @@
+type Author {
+  rut: ID!
+  firstName: String!
+  lastName: String!
+  birthDate: AWSDate!
+  books: [Book]
+  # Additional attributes
+}
+
+type Book {
+  code: ID!
+  title: String!
+  editionDate: AWSDate!
+  author: Author
+  genres: [Genre]
+  # Additional attributes
+}
+
+type Genre {
+  id: ID!
+  name: String!
+  books: [Book]
+}
+
+type Query {
+  getBook(code: ID!): Book
+  listBooks: [Book]
+  getAuthor(rut: ID!): Author
+  listAuthors: [Author]
+  getGenre(id: ID!): Genre
+  listGenres: [Genre]
+}
+
+input CreateBookInput {
+  code: ID!
+  title: String!
+  editionDate: AWSDate!
+  authorRut: ID!
+  genres: [ID]
+  # Optional fields
+}
+
+input UpdateBookInput {
+  code: ID!
+  title: String
+  editionDate: AWSDate
+  authorRut: ID
+  genres: [ID]
+  # Optional fields
+}
+
+input DeleteBookInput {
+  code: ID!
+}
+
+input CreateAuthorInput {
+  rut: ID!
+  firstName: String!
+  lastName: String!
+  birthDate: AWSDate!
+  # Optional fields
+}
+
+input UpdateAuthorInput {
+  rut: ID!
+  firstName: String
+  lastName: String
+  birthDate: AWSDate
+  # Optional fields
+}
+
+input DeleteAuthorInput {
+  rut: ID!
+}
+
+input CreateGenreInput {
+  id: ID!
+  name: String!
+  # Optional fields
+}
+
+input UpdateGenreInput {
+  id: ID!
+  name: String
+  # Optional fields
+}
+
+input DeleteGenreInput {
+  id: ID!
+}
+
+
+type DeleteResponse {
+  message: String
+  executionArn: String
+}
+
+type BulkDeleteResult {
+  executionArn: String
+  message: String
+}
+
+type Mutation {
+  createBook(input: CreateBookInput!): Book
+  updateBook(input: UpdateBookInput!): Book
+  deleteBook(input: DeleteBookInput!): Book
+  createAuthor(input: CreateAuthorInput!): Author
+  updateAuthor(input: UpdateAuthorInput!): Author
+  deleteAuthor(input: DeleteAuthorInput!): Author
+  createGenre(input: CreateGenreInput!): Genre
+  updateGenre(input: UpdateGenreInput!): Genre
+  deleteGenre(input: DeleteGenreInput!): Genre
+  deleteAuthorCascade(rut: ID!): DeleteResponse
+  bulkDeleteBooks(codes: [String!]!): BulkDeleteResult
+}
+
+schema {
+  query: Query
+  mutation: Mutation
+}
