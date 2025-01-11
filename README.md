@@ -364,7 +364,7 @@ For more details see the `schema.graphql`
 
 2. **Obtain the Access Token**  
    - Access the login URL:<br/>
-   `https://my-subdomain.auth.<REGION>.amazoncognito.com/login
+   `https://mi-subdomino.auth.<REGION>.amazoncognito.com/login
   ?client_id=<YOUR_CLIENT_ID>
   &response_type=token
   &scope=openid%20aws.cognito.signin.user.admin
@@ -401,8 +401,6 @@ Follow these steps to set up, deploy, and run the **Book Management** project on
 2. **Clone the Repository**
 
    ```bash
-    # For root dependencies
-    npm install
     # For each Lambda function
     cd src/lambdas/author
     npm install
