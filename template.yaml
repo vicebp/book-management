@@ -1,0 +1,614 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Función Lambda en TypeScript que interactúa con DynamoDB desplegada con SAM
+
+Globals:
+  Function:
+    Timeout: 10
+    Runtime: nodejs16.x
+    Handler: index.handler
+    MemorySize: 128
+
+Resources:
+  # Authentication Resources
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: BookManagement
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: BookManagementClient
+      UserPoolId: !Ref CognitoUserPool
+      GenerateSecret: false
+      AllowedOAuthFlows:
+        - implicit
+        - code
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - phone
+        - email
+        - openid
+        - profile
+        - aws.cognito.signin.user.admin
+      CallbackURLs:
+        - https://localhost/callback
+      SupportedIdentityProviders:
+        - COGNITO
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH # Habilita el flujo ROPC
+        - ALLOW_REFRESH_TOKEN_AUTH # Opcional: Permite el uso de Refresh Tokens
+
+  CognitoUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: mi-subdominio
+      UserPoolId: !Ref CognitoUserPool
+
+  # IAM Roles
+  AppSyncServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: appsync.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AppSyncLambdaAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: "*" # Es recomendable limitar esto a las funciones necesarias
+
+  StepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StepFunctionsInvokeLambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: "*"
+
+  # DynamoDB Tables
+  AuthorTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      TableName: Author
+      AttributeDefinitions:
+        - AttributeName: rut
+          AttributeType: S
+      KeySchema:
+        - AttributeName: rut
+          KeyType: HASH
+
+  BookTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Book
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: code
+          AttributeType: S
+        - AttributeName: authorRut
+          AttributeType: S
+      KeySchema:
+        - AttributeName: code
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: byAuthor
+          KeySchema:
+            - AttributeName: authorRut
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  GenresTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      TableName: Genres
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+
+  # Lambda Functions
+  AuthorLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/lambdas/author/dist
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref AuthorTable
+          BOOK_TABLE_NAME: !Ref BookTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuthorTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BookTable
+
+  BookLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/lambdas/book/dist
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref BookTable
+          GENRE_TABLE_NAME: !Ref GenresTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BookTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GenresTable
+
+  GenreLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/lambdas/genre/dist
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref GenresTable
+          BOOK_TABLE_NAME: !Ref BookTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GenresTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BookTable
+
+  BulkDeleteLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/lambdas/bulkDelete/dist
+      Environment:
+        Variables:
+          STATE_MACHINE_ARN: !Ref BulkDeleteBooksStateMachine
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - states:StartExecution
+              Resource: "*"
+
+  DeleteBookCascadeLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/lambdas/deleteBookCascade/dist
+      Environment:
+        Variables:
+          BOOK_TABLE_NAME: !Ref BookTable
+          AUTHOR_TABLE_NAME: !Ref AuthorTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BookTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuthorTable
+
+  # AppSync GraphQL API
+  GraphQLApi:
+    Type: AWS::AppSync::GraphQLApi
+    Properties:
+      Name: BookManagementApi
+      AuthenticationType: AMAZON_COGNITO_USER_POOLS
+      UserPoolConfig:
+        UserPoolId: !Ref CognitoUserPool
+        AwsRegion: !Ref "AWS::Region"
+        DefaultAction: ALLOW
+
+  GraphQLSchema:
+    Type: AWS::AppSync::GraphQLSchema
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      DefinitionS3Location: "src/schema/schema.graphql"
+
+  # AppSync Data Sources
+  AuthorDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Name: AuthorDataSource
+      Type: AWS_LAMBDA
+      LambdaConfig:
+        LambdaFunctionArn: !GetAtt AuthorLambda.Arn
+      ServiceRoleArn: !GetAtt AppSyncServiceRole.Arn
+
+  BookDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Name: BookDataSource
+      Type: AWS_LAMBDA
+      LambdaConfig:
+        LambdaFunctionArn: !GetAtt BookLambda.Arn
+      ServiceRoleArn: !GetAtt AppSyncServiceRole.Arn
+
+  GenreDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Name: GenreDataSource
+      Type: AWS_LAMBDA
+      LambdaConfig:
+        LambdaFunctionArn: !GetAtt GenreLambda.Arn
+      ServiceRoleArn: !GetAtt AppSyncServiceRole.Arn
+
+  BulkDeleteBooksDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Name: "BulkDeleteBooksDataSource"
+      Type: AWS_LAMBDA
+      ServiceRoleArn: !GetAtt AppSyncServiceRole.Arn
+      LambdaConfig:
+        LambdaFunctionArn: !GetAtt BulkDeleteLambda.Arn
+
+  # AppSync Resolvers
+  ## Author Resolvers
+  CreateAuthorResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Mutation
+      FieldName: createAuthor
+      DataSourceName: !GetAtt AuthorDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "Invoke",
+          "payload": {
+            "field": "createAuthor",
+            "arguments": $utils.toJson($context.arguments)
+          }
+        }
+      ResponseMappingTemplate: $utils.toJson($context.result)
+
+  GetAuthorResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: getAuthor
+      DataSourceName: !GetAtt AuthorDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "Invoke",
+          "payload": {
+            "field": "getAuthor",
+            "arguments": $utils.toJson($context.arguments)
+          }
+        }
+      ResponseMappingTemplate: $utils.toJson($context.result)
+
+  ListAuthorResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: listAuthors
+      DataSourceName: !GetAtt AuthorDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "Invoke",
+          "payload": {
+            "field": "listAuthors",
+            "arguments": $utils.toJson($context.arguments)
+          }
+        }
+      ResponseMappingTemplate: $utils.toJson($context.result)
+
+  UpdateAuthorResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Mutation
+      FieldName: updateAuthor
+      DataSourceName: !GetAtt AuthorDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "Invoke",
+          "payload": {
+            "field": "updateAuthor",
+            "arguments": $utils.toJson($context.arguments)
+          }
+        }
+      ResponseMappingTemplate: $utils.toJson($context.result)
+
+  DeleteAuthorResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Mutation
+      FieldName: deleteAuthor
+      DataSourceName: !GetAtt AuthorDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "Invoke",
+          "payload": {
+            "field": "deleteAuthor",
+            "arguments": $utils.toJson($context.arguments)
+          }
+        }
+      ResponseMappingTemplate: $utils.toJson($context.result)
+
+  ## Books Resolvers
+  CreateBookResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Mutation
+      FieldName: createBook
+      DataSourceName: !GetAtt BookDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "Invoke",
+          "payload": {
+            "field": "createBook",
+            "arguments": $utils.toJson($context.arguments)
+          }
+        }
+      ResponseMappingTemplate: $utils.toJson($context.result)
+
+  GetBookResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: getBook
+      DataSourceName: !GetAtt BookDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "Invoke",
+          "payload": {
+            "field": "getBook",
+            "arguments": $utils.toJson($context.arguments)
+          }
+        }
+      ResponseMappingTemplate: $utils.toJson($context.result)
+
+  ListBookResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: listBooks
+      DataSourceName: !GetAtt BookDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "Invoke",
+          "payload": {
+            "field": "listBooks",
+            "arguments": $utils.toJson($context.arguments)
+          }
+        }
+      ResponseMappingTemplate: $utils.toJson($context.result)
+
+  UpdateBookResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Mutation
+      FieldName: updateBook
+      DataSourceName: !GetAtt BookDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "Invoke",
+          "payload": {
+            "field": "updateBook",
+            "arguments": $utils.toJson($context.arguments)
+          }
+        }
+      ResponseMappingTemplate: $utils.toJson($context.result)
+
+  DeleteBookResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Mutation
+      FieldName: deleteBook
+      DataSourceName: !GetAtt BookDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "Invoke",
+          "payload": {
+            "field": "deleteBook",
+            "arguments": $utils.toJson($context.arguments)
+          }
+        }
+      ResponseMappingTemplate: $utils.toJson($context.result)
+
+  BookAuthorResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: "Book"
+      FieldName: "author"
+      DataSourceName: !GetAtt AuthorDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "Invoke",
+          "payload": {
+            "field": "getAuthor",
+            "arguments": {
+              "rut": $util.toJson($context.source.authorRut)
+            }
+          }
+        }
+      ResponseMappingTemplate: $util.toJson($context.result)
+
+  ## Genre Resolvers
+  CreateGenreResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Mutation
+      FieldName: createGenre
+      DataSourceName: !GetAtt GenreDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "Invoke",
+          "payload": {
+            "field": "createGenre",
+            "arguments": $utils.toJson($context.arguments)
+          }
+        }
+      ResponseMappingTemplate: $utils.toJson($context.result)
+
+  GetGenreResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: getGenre
+      DataSourceName: !GetAtt GenreDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "Invoke",
+          "payload": {
+            "field": "getGenre",
+            "arguments": $utils.toJson($context.arguments)
+          }
+        }
+      ResponseMappingTemplate: $utils.toJson($context.result)
+
+  ListGenresResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: listGenres
+      DataSourceName: !GetAtt GenreDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "Invoke",
+          "payload": {
+            "field": "listGenres",
+            "arguments": $utils.toJson($context.arguments)
+          }
+        }
+      ResponseMappingTemplate: $utils.toJson($context.result)
+
+  UpdateGenreResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Mutation
+      FieldName: updateGenre
+      DataSourceName: !GetAtt GenreDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "Invoke",
+          "payload": {
+            "field": "updateGenre",
+            "arguments": $utils.toJson($context.arguments)
+          }
+        }
+      ResponseMappingTemplate: $utils.toJson($context.result)
+
+  DeleteGenreResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Mutation
+      FieldName: deleteGenre
+      DataSourceName: !GetAtt GenreDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "Invoke",
+          "payload": {
+            "field": "deleteGenre",
+            "arguments": $utils.toJson($context.arguments)
+          }
+        }
+      ResponseMappingTemplate: $utils.toJson($context.result)
+
+  ## BulkDelete Resolvers
+  BulkDeleteBooksResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Mutation
+      FieldName: bulkDeleteBooks
+      DataSourceName: !GetAtt BulkDeleteBooksDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "Invoke",
+          "payload": {
+            "field": "bulkDeleteBooks",
+            "arguments": $utils.toJson($context.arguments)
+          }
+        }
+      ResponseMappingTemplate: $utils.toJson($context.result)
+
+  # Step Functions State Machine
+  BulkDeleteBooksStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: BulkDeleteBooksMachine
+      RoleArn: !GetAtt StepFunctionsRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "State Machine for Bulk Deletion of Books",
+          "StartAt": "ForEachBook",
+          "States": {
+            "ForEachBook": {
+              "Type": "Map",
+              "ItemsPath": "$.codes",
+              "Iterator": {
+                "StartAt": "DeleteBookCascade",
+                "States": {
+                  "DeleteBookCascade": {
+                    "Type": "Task",
+                    "Resource": "${DeleteBookCascadeLambda.Arn}",
+                    "End": true
+                  }
+                }
+              },
+              "End": true
+            }
+          }
+        }
