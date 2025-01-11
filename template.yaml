@@ -10,7 +10,7 @@ Globals:
     MemorySize: 128
 
 Resources:
-  # Auth
+  # Authentication Resources
   CognitoUserPool:
     Type: AWS::Cognito::UserPool
     Properties:
@@ -55,6 +55,7 @@ Resources:
       Domain: mi-subdominio
       UserPoolId: !Ref CognitoUserPool
 
+  # IAM Roles
   AppSyncServiceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -75,7 +76,27 @@ Resources:
                   - lambda:InvokeFunction
                 Resource: "*" # Es recomendable limitar esto a las funciones necesarias
 
-  # Tables
+  StepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StepFunctionsInvokeLambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: "*"
+
+  # DynamoDB Tables
   AuthorTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -121,7 +142,7 @@ Resources:
         - AttributeName: id
           KeyType: HASH
 
-  #Lambdas
+  # Lambda Functions
   AuthorLambda:
     Type: AWS::Serverless::Function
     Properties:
@@ -192,7 +213,7 @@ Resources:
         - DynamoDBCrudPolicy:
             TableName: !Ref AuthorTable
 
-  # GraphQl
+  # AppSync GraphQL API
   GraphQLApi:
     Type: AWS::AppSync::GraphQLApi
     Properties:
@@ -209,7 +230,7 @@ Resources:
       ApiId: !GetAtt GraphQLApi.ApiId
       DefinitionS3Location: "src/schema/schema.graphql"
 
-  #DataSources
+  # AppSync Data Sources
   AuthorDataSource:
     Type: AWS::AppSync::DataSource
     Properties:
@@ -250,8 +271,8 @@ Resources:
       LambdaConfig:
         LambdaFunctionArn: !GetAtt BulkDeleteLambda.Arn
 
-  # Resolvers
-  #Author
+  # AppSync Resolvers
+  ## Author Resolvers
   CreateAuthorResolver:
     Type: AWS::AppSync::Resolver
     Properties:
@@ -342,7 +363,7 @@ Resources:
         }
       ResponseMappingTemplate: $utils.toJson($context.result)
 
-  #Books
+  ## Books Resolvers
   CreateBookResolver:
     Type: AWS::AppSync::Resolver
     Properties:
@@ -453,7 +474,7 @@ Resources:
         }
       ResponseMappingTemplate: $util.toJson($context.result)
 
-  #Genre
+  ## Genre Resolvers
   CreateGenreResolver:
     Type: AWS::AppSync::Resolver
     Properties:
@@ -544,7 +565,7 @@ Resources:
         }
       ResponseMappingTemplate: $utils.toJson($context.result)
 
-  #BulkDelete
+  ## BulkDelete Resolvers
   BulkDeleteBooksResolver:
     Type: AWS::AppSync::Resolver
     Properties:
@@ -563,7 +584,7 @@ Resources:
         }
       ResponseMappingTemplate: $utils.toJson($context.result)
 
-  #STATE MACHINE
+  # Step Functions State Machine
   BulkDeleteBooksStateMachine:
     Type: AWS::StepFunctions::StateMachine
     Properties:
@@ -591,23 +612,3 @@ Resources:
             }
           }
         }
-
-  StepFunctionsRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: states.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: StepFunctionsInvokeLambda
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - lambda:InvokeFunction
-                Resource: "*"
